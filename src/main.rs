@@ -1,3 +1,5 @@
+use ostrich_core::{Command, RawMessage};
+
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc};
 
@@ -6,7 +8,7 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 
 use tokio::stream::{StreamExt};
-use ostrich_server::{Shared, Message, Peer, DataBase, ServerCommand};
+use ostrich_server::{Shared, Message, Peer, DataBase};
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
@@ -55,14 +57,14 @@ async fn process(shared: Arc<Mutex<Shared>>,
     // let _ = user.write("Welcome to ostrich2\n".to_string()).await?;
 
     // Read the log in command from the user
-    let login_command = match user.read().await {
-        Ok(Some(login)) => login.trim().to_string(),
+    let login_command = match user.read_command().await {
+        Ok(Some(login)) => login,
         Ok(None) => {
             println!("Connection losed!");
             return Ok(());
         },
         Err(e) => {
-            eprintln!("User error: {}", e);
+            eprintln!("User login error: {}", e);
             return Ok(());
         },
     };
@@ -71,16 +73,15 @@ async fn process(shared: Arc<Mutex<Shared>>,
     let name = match db.lock().await.check_log_in(login_command) {
             Ok(name) => {
                 // Notify the user for successful log in
-                user.send_command(&ServerCommand::Ok).await?;
+                user.send_command(&Command::Ok).await?;
                 name
             },
             Err(err) => {
-                let _ = user.send_command(&ServerCommand::Err(err)).await;
+                let _ = user.send_command(&Command::Err(err.to_string())).await;
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
                                           "Login error: Incorrect username or password"));
             },
     };
-
 
     println!("User {} loged in", name);
     
@@ -90,7 +91,7 @@ async fn process(shared: Arc<Mutex<Shared>>,
         if let Err(err) = shared.lock().await.add(name.clone(), tx) {
             // The user is already loged in... so suspicious
             eprintln!("User {}, error: {}", name, err.to_string()); 
-            let _ = user.send_command(&ServerCommand::Err(err)).await;
+            let _ = user.send_command(&Command::Err(err.to_string())).await?;
             return Err(io::Error::new(io::ErrorKind::AlreadyExists,
                                       "A user with the same credentials is already loged in"));
         }
@@ -100,53 +101,25 @@ async fn process(shared: Arc<Mutex<Shared>>,
         match request {
 
             Ok(Message::Received(mesg)) => {
-                // Log the message to the pending list of the user
-                // NOTE UNUSED
-                db.lock().await.store(&name, mesg)?;
+                // Send the receiver message to the user 
+                let _n = user.send_command(&mesg).await?;
             },
 
-            Ok(Message::Sended(mesg)) => {
-                // Split the message
-                let input = mesg.clone();
-                let mut input = input.trim().split('~');
-
-                // Determine if the user requests a GET
-                match input.next() {
-                    Some("GET")  => {
-                        println!("A get was requested!");
-                        // Get pending messages
-                        while let Some(mesg) = db.lock().await.get_next(&name) {
-                            println!("Sending: {}", mesg);
-                            // Send the pending messages to the user
-                            if let Err(err) = user.send_command(&ServerCommand::Mesg(mesg)).await {
-                                eprintln!("Send error: {}", err);
-                            }
-                        }
-                        user.send_command(&ServerCommand::End).await?;
+            Ok(Message::ToSend(mesg)) => {
+                // The user wants to send a message
+                // The only type of command that the user is allowed to send is MSG
+                match mesg {
+                    // Send the message to the target 
+                    Command::Msg(_,_,_) => shared.lock().await.send(mesg).await?,
+                    // Notify that a non valid command is sent
+                    _ => {
+                        eprintln!("User {} invaid command to send", name);
+                        user.send_command(
+                            &Command::Err(
+                                "Unable to send non MSG command".to_string()
+                            )
+                        ).await?;
                     },
-
-                    Some("MSG") => {
-                        // Verify sender
-                        match input.next() {
-                            Some(sender) if sender != name => {
-                                eprintln!("Username {} and sender {} does not match", name, sender);
-                                continue;
-                            },
-                            Some(_) => (), // Sender is correct
-                            None => eprintln!("Incorrect MSG request by  {}", name),
-                        }
-                        // Get target name 
-                        match input.next() {
-                            Some(target) => {
-                                // Remove the command part of the message
-                                let (_command, mesg) = mesg.split_at(4);
-                                db.lock().await.store(&target, mesg.to_string())?
-                            },
-                            None => eprintln!("Incorrect MSG request by  {}", name),
-                        }
-                    },
-
-                    Some(_) | None => eprintln!("Unknown request from {}", name),
                 }
             },
 

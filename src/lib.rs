@@ -1,12 +1,14 @@
+use ostrich_core::{RawMessage, Command, PCK_SIZE};
+
 use tokio::sync::mpsc;
 use tokio::net::{TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead};
 use tokio::stream::{Stream};
 
-use json::{JsonValue, 
-    iterators::Entries,
-    object::Iter,
-};
+// use json::{JsonValue, 
+//     iterators::Entries,
+//     object::Iter,
+// };
 
 use std::collections::HashMap;
 use std::io::{self, BufReader, prelude::*};
@@ -16,8 +18,8 @@ use std::fs::File;
 use core::task::{Poll, Context};
 use core::pin::Pin;
 
-pub type Tx = mpsc::UnboundedSender<String>;
-pub type Rx = mpsc::UnboundedReceiver<String>;
+pub type Tx = mpsc::UnboundedSender<Command>;
+pub type Rx = mpsc::UnboundedReceiver<Command>;
 
 pub struct Shared {
     shared: HashMap<String, Tx>,
@@ -46,84 +48,32 @@ impl Shared {
         }
     }
     
-    /// mesg structure: MSG~sender~target~text
     pub async fn send(&mut self, 
-                      command: String, 
-                      exclude: &str) -> Result<(), io::Error>{
+                      command: Command) -> Result<(), io::Error>{
 
-        let mut mesg = command.split('~'); 
-
-        // Check the MSG command
-        match mesg.next() {
-            Some(c) if c == "MSG" => (),
-            Some(_) | None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                                              "Incorrect MSG command")),
+        // Get the target's name from the MSG command
+        let target = match &command {
+            Command::Msg(_,t,_) => t,
+            _ => return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput, 
+                    "Wrong command type. Only MSG commands can be sended")),
         };
 
-        // Ignore sender part of the MSG command
-        let _ = mesg.next();
-
-        // Get target's name
-        let target = match mesg.next() {
+        // Get the target user's tx
+        let target_tx = match self.shared.get_mut(&target.to_string()) {
             Some(t) => t,
-            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                                              "Wrong target")),
-        }; 
-        // Get the target's user
-        let target = match self.shared.get_mut(&target.to_string()) {
-            Some(t) => t,
-            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                                              "Wrong target")),
+            None => return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput, 
+                    format!("Target {} not found", target))),
         };
-        
-        // Get the actual message
-        // NOTE: Do not accept empty messages
-        let mesg = match mesg.next() {
-            Some(mesg) => mesg,
-            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                                              "Cannot get the message from command")),
-        }; 
 
         // Send the message, MSG~sender~message
-        if let Err(_) = target.send(command) {
+        if let Err(_) = target_tx.send(command) {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, 
-                                      "Cannot transmit data to users"));
+                                      "Cannot transmit data to target"));
         }
 
-        /*
-        for (username, tx) in &self.shared {
-            if username != exclude {
-                if let Err(_) = tx.send(mesg.clone()) {
-                    return Err(io::Error::new(io::ErrorKind::BrokenPipe, 
-                                              "Cannot transmit data to users"));
-                }
-            }
-        }
-        */
         Ok(())
-    }
-}
-
-pub enum Message {
-    Received(String), // The user has received something
-    Sended(String), // The user has something to say
-}
-
-pub enum ServerCommand {
-    Ok,
-    Err(io::Error),
-    Mesg(String),
-    End,
-}
-
-impl fmt::Display for ServerCommand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ServerCommand::Ok => write!(f, "OK"),
-            ServerCommand::Err(err) => write!(f, "ERR~{}", err),
-            ServerCommand::Mesg(m) => write!(f, "MSG~{}", m),
-            ServerCommand::End => write!(f, "END"),
-        }
     }
 }
 
@@ -137,29 +87,35 @@ impl Peer {
     pub fn new(socket: TcpStream, rx: Rx) -> Peer {
         Peer{ socket, rx }
     }
-
+    
+    /*
     pub async fn write(&mut self, mesg: String) -> Result<usize, io::Error> {
         self.socket.write(mesg.as_bytes()).await
     }
+    */
 
-    pub async fn send_command(&mut self, command: &ServerCommand) -> Result<usize, io::Error> {
-        self.socket.write(command.to_string().as_bytes()).await
+    pub async fn send_command(&mut self, command: &Command) -> Result<usize, io::Error> {
+        self.socket.write(&RawMessage::to_raw(command)?).await
     }
 
-    pub async fn read(&mut self) -> Result<Option<String>, io::Error> {
+    pub async fn read_command(&mut self) -> Result<Option<Command>, io::Error> {
         
-        let mut buffer = [0u8;1024];
+        let mut buffer = [0u8;PCK_SIZE];
         let n = self.socket.read(&mut buffer).await?;
 
         if n == 0 {
             return Ok(None);
         }
-
-        let data = String::from_utf8_lossy(&buffer[..n]);
-            
-        Ok(Some(data.to_string()))
+        // else 
+        let command = RawMessage::from_raw(&buffer)?;
+        Ok(Some(command))
     }
     
+}
+
+pub enum Message {
+    ToSend(Command),
+    Received(Command),
 }
 
 impl Stream for Peer {
@@ -170,12 +126,12 @@ impl Stream for Peer {
                  cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         
         // Check if we have received something
-        //if let Poll::Ready(Some(v)) = Pin::new(&mut self.rx).poll_next(cx) {
-        //    return Poll::Ready(Some(Ok(Message::Received(v))));
-        //}
+        if let Poll::Ready(Some(v)) = Pin::new(&mut self.rx).poll_next(cx) {
+            return Poll::Ready(Some(Ok(Message::Received(v))));
+        }
 
         // Check if we have received something
-        let mut data = [0u8; 1024];
+        let mut data = [0u8; PCK_SIZE];
         let n = match Pin::new(&mut self.socket).poll_read(cx, &mut data) {
             Poll::Ready(Ok(n)) => n,
             Poll::Ready(Err(err)) => return Poll::Ready(Some(Err(err))),
@@ -183,8 +139,8 @@ impl Stream for Peer {
         };
         
         if n > 0 {
-            let data = String::from_utf8_lossy(&data[..n]).to_string();
-            return Poll::Ready(Some(Ok(Message::Sended(data))));
+            let command = RawMessage::from_raw(&data)?;
+            return Poll::Ready(Some(Ok(Message::ToSend(command))));
 
         } else {
             return Poll::Ready(None);
@@ -257,31 +213,17 @@ impl DataBase {
     }
 
     // Returns the username and password from the user input 
-    pub fn check_log_in(&self, data: String) -> Result<String, io::Error> {
-        // Split the command in sections
-        let mut data = data.split('~');
-
-        // Check if the command is USR login command
-        match data.next() {
-            Some(c) if c == "USR" => (),
-            Some(_) | None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                                              "Incorrect log in command")),
-        };
-
-        let name = match data.next() {
-            Some(n) => n,
-            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                                              "No username found")),
-        };
-
-        let password = match data.next() {
-            Some(p) => p,
-            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                                              "No password found")),
+    pub fn check_log_in(&self, command: Command) -> Result<String, io::Error> {
+        // Check if the command is USR login command and get username and password
+        let (username, password) = match &command {
+            Command::Usr(u, p) => (u, p),
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
+                                           "Incorrect log in command")),
         };
 
         // Create a user with the given username and password
-        let usr = User {name: name.clone().to_string(), 
+        let usr = User {
+            name: username.clone().to_string(), 
             password: password.to_string()};
 
         // Try to find the requested user in the db
@@ -290,9 +232,10 @@ impl DataBase {
                                       "Wrong username or password"))
         }
 
-        Ok(name.to_string())
+        Ok(username.to_string())
     }
-
+    
+    /*
     pub fn store(&mut self, name: &str, mesg: String) -> Result<(), io::Error> {
         match self.pending.get_mut(name) {
             Some(p) => {
@@ -326,5 +269,6 @@ impl DataBase {
             None => None, 
         }
     }
+    */
 }
 

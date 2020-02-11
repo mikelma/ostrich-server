@@ -36,7 +36,7 @@ async fn main() -> Result<(), io::Error> {
         // Spawn our handler to be run asynchronously.
         tokio::spawn(async move {
             if let Err(e) = process(world, data, stream, addr).await {
-                println!("an error occured; error = {:?}", e);
+                println!("An error occured, ERROR: {:?}", e);
             }
         });
     }
@@ -101,8 +101,10 @@ async fn process(shared: Arc<Mutex<Shared>>,
         match request {
 
             Ok(Message::Received(mesg)) => {
-                // Send the receiver message to the user 
-                let _n = user.send_command(&mesg).await?;
+                // Send the received message to the user 
+                if let Err(err) = user.send_command(&mesg).await {
+                    eprintln!("User {} error sending message: {}", name, err);
+                }
             },
 
             Ok(Message::ToSend(mesg)) => {
@@ -110,7 +112,19 @@ async fn process(shared: Arc<Mutex<Shared>>,
                 // The only type of command that the user is allowed to send is MSG
                 match mesg {
                     // Send the message to the target 
-                    Command::Msg(_,_,_) => shared.lock().await.send(mesg).await?,
+                    Command::Msg(_,_,_) => {
+                        if let Err(err) = shared.lock().await.send(mesg).await {
+                            eprintln!("[ERR]: User {} when trying to send data: {}", name, err);
+                            // Send error message to the user
+                            let command = Command::Err(
+                                format!("unable to send message: {}", err));
+                            if let Err(err) = user.send_command(&command).await {
+                                eprintln!("[ERR]: Cannot send Err command to user {}: {}",
+                                          name, err);
+                            }
+                        }
+
+                    },
                     // Notify that a non valid command is sent
                     _ => {
                         eprintln!("User {} invaid command to send", name);

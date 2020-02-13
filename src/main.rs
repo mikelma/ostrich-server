@@ -1,4 +1,4 @@
-use ostrich_core::{Command, RawMessage};
+use ostrich_core::Command;
 
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc};
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 
 use tokio::stream::{StreamExt};
-use ostrich_server::{Shared, Message, Peer, DataBase};
+use ostrich_server::{SharedConn, Message, Peer, DataBase};
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
@@ -17,7 +17,7 @@ async fn main() -> Result<(), io::Error> {
     let db = DataBase::new("db.json")?;
     let db = Arc::new(Mutex::new(db));
 
-    let shared = Arc::new(Mutex::new(Shared::new()));
+    let shared_conn = Arc::new(Mutex::new(SharedConn::new()));
 
     let addr = "127.0.0.1:9999";
 
@@ -29,8 +29,8 @@ async fn main() -> Result<(), io::Error> {
         // Asynchronously wait for an inbound TcpStream.
         let (stream, addr) = listener.accept().await?;
 
-        // Clone a handle to the `Shared` state for the new connection.
-        let world = Arc::clone(&shared);
+        // Clone a handle to the `ConnectedUsers` state for the new connection.
+        let world = Arc::clone(&shared_conn);
         let data = Arc::clone(&db);
 
         // Spawn our handler to be run asynchronously.
@@ -42,7 +42,7 @@ async fn main() -> Result<(), io::Error> {
     }
 }
 
-async fn process(shared: Arc<Mutex<Shared>>,
+async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                  db: Arc<Mutex<DataBase>>,
                  stream: TcpStream,
                  addr: SocketAddr) -> Result<(), io::Error> {
@@ -88,7 +88,7 @@ async fn process(shared: Arc<Mutex<Shared>>,
     // Check if a client with the same user is 
     // already loged in and register the user
     {
-        if let Err(err) = shared.lock().await.add(name.clone(), tx) {
+        if let Err(err) = shared_conn.lock().await.add(name.clone(), tx) {
             // The user is already loged in... so suspicious
             eprintln!("User {}, error: {}", name, err.to_string()); 
             let _ = user.send_command(&Command::Err(err.to_string())).await?;
@@ -113,7 +113,7 @@ async fn process(shared: Arc<Mutex<Shared>>,
                 match mesg {
                     // Send the message to the target 
                     Command::Msg(_,_,_) => {
-                        if let Err(err) = shared.lock().await.send(mesg).await {
+                        if let Err(err) = shared_conn.lock().await.send(mesg).await {
                             eprintln!("[ERR]: User {} when trying to send data: {}", name, err);
                             // Send error message to the user
                             let command = Command::Err(
@@ -145,7 +145,7 @@ async fn process(shared: Arc<Mutex<Shared>>,
 
     // Delete the user from Shared
     {
-        if let Err(err) = shared.lock().await.remove(&name) {
+        if let Err(err) = shared_conn.lock().await.remove(&name) {
             eprintln!("Error. User {}: {}", name, err); 
         }
         println!("User {} loged out", name);

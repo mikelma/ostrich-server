@@ -5,14 +5,8 @@ use tokio::net::{TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead};
 use tokio::stream::{Stream};
 
-// use json::{JsonValue, 
-//     iterators::Entries,
-//     object::Iter,
-// };
-
 use std::collections::HashMap;
 use std::io::{self, BufReader, prelude::*};
-use std::fmt;
 use std::fs::File;
 
 use core::task::{Poll, Context};
@@ -21,27 +15,27 @@ use core::pin::Pin;
 pub type Tx = mpsc::UnboundedSender<Command>;
 pub type Rx = mpsc::UnboundedReceiver<Command>;
 
-pub struct Shared {
-    shared: HashMap<String, Tx>,
+pub struct SharedConn {
+    shared_conn: HashMap<String, Tx>,
 }
 
-impl Shared {
+impl SharedConn {
 
-    pub fn new() -> Shared {
-        Shared { shared: HashMap::new()}
+    pub fn new() -> SharedConn{
+        SharedConn{ shared_conn: HashMap::new()}
     }
 
     pub fn add(&mut self, name: String, tx: Tx) -> Result<(), io::Error> {
-        if self.shared.contains_key(&name) {
+        if self.shared_conn.contains_key(&name) {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists,
                                       "A user with the same credentials is already loged in"));
         }
-        self.shared.insert(name, tx);
+        self.shared_conn.insert(name, tx);
         Ok(())
     }
 
     pub fn remove(&mut self, name: &str) -> Result<(), io::Error> {
-        match self.shared.remove(name) {
+        match self.shared_conn.remove(name) {
             Some(_) => Ok(()),
             None => Err(io::Error::new(io::ErrorKind::NotFound, 
                                        "User not found")),
@@ -60,7 +54,7 @@ impl Shared {
         };
 
         // Get the target user's tx
-        let target_tx = match self.shared.get_mut(&target.to_string()) {
+        let target_tx = match self.shared_conn.get_mut(&target.to_string()) {
             Some(t) => t,
             None => return Err(io::Error::new(
                     io::ErrorKind::InvalidInput, 
@@ -87,12 +81,6 @@ impl Peer {
     pub fn new(socket: TcpStream, rx: Rx) -> Peer {
         Peer{ socket, rx }
     }
-    
-    /*
-    pub async fn write(&mut self, mesg: String) -> Result<usize, io::Error> {
-        self.socket.write(mesg.as_bytes()).await
-    }
-    */
 
     pub async fn send_command(&mut self, command: &Command) -> Result<usize, io::Error> {
         self.socket.write(&RawMessage::to_raw(command)?).await
@@ -158,7 +146,6 @@ struct User {
 
 pub struct DataBase {
     db: Vec<User>,
-    pending: HashMap<String, Vec<String>>, // username, vector of pending messages
 }
 
 impl DataBase {
@@ -196,11 +183,10 @@ impl DataBase {
             db.push(User {name, password});
         }
         
-        let pending = HashMap::new();
-        
-        Ok(DataBase {db, pending})
+        Ok(DataBase {db})
     }
-
+    
+    /*
     fn get(&self, name: &str) -> Option<&User> {
         self.db.iter()
             .find(|user| user.name == name)
@@ -211,6 +197,7 @@ impl DataBase {
             .find(|user| user.name == name)
             .is_some()
     }
+    */
 
     // Returns the username and password from the user input 
     pub fn check_log_in(&self, command: Command) -> Result<String, io::Error> {
@@ -234,41 +221,5 @@ impl DataBase {
 
         Ok(username.to_string())
     }
-    
-    /*
-    pub fn store(&mut self, name: &str, mesg: String) -> Result<(), io::Error> {
-        match self.pending.get_mut(name) {
-            Some(p) => {
-                p.push(mesg);
-                println!("User {}'s pending {} messages", name, p.len());
-                Ok(())
-            },
-            None => {
-                // Verify the target existance
-                if !self.exists(name) {
-                    return Err(io::Error::new(io::ErrorKind::NotFound, 
-                                              format!("Target user {} not found", name)))
-                    
-                }
-                // The user is not initialized in the pending list
-                // So, init the users's pending list
-                let _ = self.pending.insert(name.to_string(), vec![mesg]);
-                println!("Loged {} in the pending list", name);
-                Ok(())
-            },
-        }
-    }
-    
-    pub fn get_next(&mut self, name: &str) -> Option<String> {
-        match self.pending.get_mut(name) {
-            Some(p) if p.len() == 0 => {
-                println!("Nothing pending for {}", name);
-                None
-            }, 
-            Some(p) => Some(p.remove(p.len()-1)),
-            None => None, 
-        }
-    }
-    */
 }
 

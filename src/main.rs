@@ -36,7 +36,7 @@ async fn main() -> Result<(), io::Error> {
         // Spawn our handler to be run asynchronously.
         tokio::spawn(async move {
             if let Err(e) = process(world, data, stream, addr).await {
-                println!("An error occured, ERROR: {:?}", e);
+                println!("User dropped with error, ERROR: {:?}", e);
             }
         });
     }

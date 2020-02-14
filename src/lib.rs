@@ -186,19 +186,6 @@ impl DataBase {
         Ok(DataBase {db})
     }
     
-    /*
-    fn get(&self, name: &str) -> Option<&User> {
-        self.db.iter()
-            .find(|user| user.name == name)
-    }
-
-    fn exists(&self, name: &str) -> bool {
-        self.db.iter()
-            .find(|user| user.name == name)
-            .is_some()
-    }
-    */
-
     // Returns the username and password from the user input 
     pub fn check_log_in(&self, command: Command) -> Result<String, io::Error> {
         // Check if the command is USR login command and get username and password

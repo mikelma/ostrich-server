@@ -54,9 +54,7 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
 
     let mut user = Peer::new(stream, rx);
 
-    // let _ = user.write("Welcome to ostrich2\n".to_string()).await?;
-
-    // Read the log in command from the user
+    // Read the log in command from the user and parse to Command
     let login_command = match user.read_command().await {
         Ok(Some(login)) => login,
         Ok(None) => {
@@ -68,8 +66,9 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
             return Ok(());
         },
     };
-
-    // Check if the log in command is correct
+    // Check if the log in command is correct.
+    // If the username is registered, check password.
+    // Else, log in the user as anonymous user.
     let name = match db.lock().await.check_log_in(login_command) {
             Ok(name) => {
                 // Notify the user for successful log in
@@ -79,12 +78,9 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
             Err(err) => {
                 let _ = user.send_command(&Command::Err(err.to_string())).await;
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
-                                          "Login error: Incorrect username or password"));
+                                          format!("Login error: {}", err)));
             },
     };
-
-    println!("User {} loged in", name);
-    
     // Check if a client with the same user is 
     // already loged in and register the user
     {
@@ -96,6 +92,7 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                                       "A user with the same credentials is already loged in"));
         }
     }
+    println!("User {} loged in", name);
 
     while let Some(request) = user.next().await {
         match request {

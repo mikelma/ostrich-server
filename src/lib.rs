@@ -87,7 +87,6 @@ impl Peer {
     }
 
     pub async fn read_command(&mut self) -> Result<Option<Command>, io::Error> {
-        
         let mut buffer = [0u8;PCK_SIZE];
         let n = self.socket.read(&mut buffer).await?;
 
@@ -188,7 +187,7 @@ impl DataBase {
     
     // Returns the username and password from the user input 
     pub fn check_log_in(&self, command: Command) -> Result<String, io::Error> {
-        // Check if the command is USR login command and get username and password
+        // Check if the command is USR login command, and get username and password
         let (username, password) = match &command {
             Command::Usr(u, p) => (u, p),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
@@ -197,16 +196,25 @@ impl DataBase {
 
         // Create a user with the given username and password
         let usr = User {
-            name: username.clone().to_string(), 
+            name: username.clone().to_string(),
             password: password.to_string()};
 
         // Try to find the requested user in the db
-        if !self.db.contains(&usr) {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
-                                      "Wrong username or password"))
+        match self.db.iter().position(|x| x.name == usr.name) {
+            Some(index) => {
+                // The username exists in the db, now check if 
+                // the password is also correct
+                if self.db[index] == usr {
+                    return Ok(username.to_string());
+                }
+                // If the password does not match
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
+                                          "Wrong credentials"))
+            },
+            // The username is not registered in the server.
+            // Accept the connection.
+            None => return Ok(username.to_string()),
         }
-
-        Ok(username.to_string())
     }
 }
 

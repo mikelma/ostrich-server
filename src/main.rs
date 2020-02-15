@@ -69,8 +69,18 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
     // Check if the log in command is correct.
     // If the username is registered, check password.
     // Else, log in the user as anonymous user.
-    let name = match db.lock().await.check_log_in(login_command) {
+    let name = match db.lock().await.check_log_in_credentials(login_command) {
             Ok(name) => {
+                // The crediantials where ok.
+                // Check if a client with the same user is 
+                // already loged in or register the user
+                if let Err(err) = shared_conn.lock().await.add(name.clone(), tx) {
+                    // The user is already loged in... so suspicious
+                    eprintln!("User {}, error: {}", name, err.to_string()); 
+                    let _ = user.send_command(&Command::Err(err.to_string())).await?;
+                    return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                                              "A user with the same credentials is already loged in"));
+                }
                 // Notify the user for successful log in
                 user.send_command(&Command::Ok).await?;
                 name
@@ -81,17 +91,6 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                                           format!("Login error: {}", err)));
             },
     };
-    // Check if a client with the same user is 
-    // already loged in and register the user
-    {
-        if let Err(err) = shared_conn.lock().await.add(name.clone(), tx) {
-            // The user is already loged in... so suspicious
-            eprintln!("User {}, error: {}", name, err.to_string()); 
-            let _ = user.send_command(&Command::Err(err.to_string())).await?;
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
-                                      "A user with the same credentials is already loged in"));
-        }
-    }
     println!("User {} loged in", name);
 
     while let Some(request) = user.next().await {

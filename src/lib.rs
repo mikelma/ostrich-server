@@ -186,7 +186,7 @@ impl DataBase {
     }
     
     // Returns the username and password from the user input 
-    pub fn check_log_in(&self, command: Command) -> Result<String, io::Error> {
+    pub fn check_log_in_credentials(&self, command: Command) -> Result<String, io::Error> {
         // Check if the command is USR login command, and get username and password
         let (username, password) = match &command {
             Command::Usr(u, p) => (u, p),

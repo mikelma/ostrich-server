@@ -1,5 +1,6 @@
 use ostrich_core::{RawMessage, Command, PCK_SIZE};
 
+#[macro_use] extern crate log;
 use tokio::sync::mpsc;
 use tokio::net::{TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead};
@@ -171,7 +172,7 @@ impl DataBase {
                 None => continue,
             };
 
-            println!("Init user: {}", name);
+            trace!("Init user: {}", name);
 
             let password = match user["password"].as_str() {
                 Some(s) => s.to_string(),

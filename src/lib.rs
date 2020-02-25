@@ -17,13 +17,14 @@ pub type Tx = mpsc::UnboundedSender<Command>;
 pub type Rx = mpsc::UnboundedReceiver<Command>;
 
 pub struct SharedConn {
-    shared_conn: HashMap<String, Tx>,
+    shared_conn: HashMap<String, Tx>,       // Username, Tx
+    groups: HashMap<String, Vec<String>>,   // Group name, List of usernames
 }
 
 impl SharedConn {
 
     pub fn new() -> SharedConn{
-        SharedConn{ shared_conn: HashMap::new()}
+        SharedConn{ shared_conn: HashMap::new(), groups: HashMap::new() }
     }
 
     pub fn add(&mut self, name: String, tx: Tx) -> Result<(), io::Error> {
@@ -42,18 +43,41 @@ impl SharedConn {
                                        "User not found")),
         }
     }
+
+    pub fn add_group(&mut self, group_name: &str, username: &str) -> Result<(), io::Error> {
+        if let Some(group) = self.groups.get_mut(group_name) {
+            // The group exists, if the user was already in the group, ignore request
+            if group.iter().find(|&x| *x == group_name.to_string()).is_some() {
+                trace!("User {} wanted to join {}  when already joined", username, group_name);
+                return Ok(())
+            } else {
+                // Add the user to the group
+                group.push(username.to_string());
+            }
+        } else {
+            // The group does not exist, create the group and add the user to the group
+            self.groups.insert(group_name.to_string(), vec![username.to_string()]);
+        }
+        Ok(())
+    }
     
     pub async fn send(&mut self, 
                       command: Command) -> Result<(), io::Error>{
 
         // Get the target's name from the MSG command
-        let target = match &command {
-            Command::Msg(_,t,_) => t,
+        let (sender, target) = match &command {
+            Command::Msg(s,t,_) => (s, t),
             _ => return Err(io::Error::new(
                     io::ErrorKind::InvalidInput, 
                     "Wrong command type. Only MSG commands can be sended")),
         };
 
+        // Check if the target is a group
+        if !target.starts_with("#") {
+            // Send the message to all participants of the group
+            return self.send2group(sender, target, &command).await;
+        }
+        
         // Get the target user's tx
         let target_tx = match self.shared_conn.get_mut(&target.to_string()) {
             Some(t) => t,
@@ -67,6 +91,43 @@ impl SharedConn {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, 
                                       "Cannot transmit data to target"));
         }
+
+        Ok(())
+    }
+
+    async fn send2group(&mut self, sender: &str, 
+        target: &str, command: &Command) -> Result<(), io::Error>{
+        
+        // Get the target group, if group does not exist return an error
+        let group_users = match self.groups.get(target) {
+            Some(g) => g,
+            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
+                    format!("The target group {} is does not exist", target))),
+        };
+
+        // Verify that the sender is a member from the target group
+        if let None = group_users.iter().find(|&x| x == sender) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
+                    format!("user {} is not a memeber of {}", sender, target)));
+        }
+
+        for name in group_users {
+            if name != sender {
+                // Get the Tx of the user
+                let user_tx = match self.shared_conn.get_mut(name) {
+                    Some(u) => u,
+                    None => return Err(io::Error::new(io::ErrorKind::NotFound,
+                            format!("sender {} cannot find user {} in group {}", 
+                                sender, name, target))),
+                };
+                // Send a copy of the command to the user's Tx
+                if let Err(err) = user_tx.send(command.clone()) {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
+                            format!("Cannot send command to {} @ {}, unable to send over Tx: {}", 
+                                sender, target, err)));
+                }
+            } 
+        } 
 
         Ok(())
     }

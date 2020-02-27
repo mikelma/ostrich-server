@@ -10,7 +10,7 @@ edition = "2018"
 ostrich-core = { git = "https://github.com/mikelma/ostrich-core"}
 tokio = { version = "0.2", features = ["full"] }
 tokio-codec = "0.2.0-alpha.6"
-futures = "0.3.0"
+#futures = "0.3.0"
 json = "0.12.1"
 log = "0.4.8"
 simplelog = "0.7.4"

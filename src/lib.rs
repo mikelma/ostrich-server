@@ -44,15 +44,20 @@ impl SharedConn {
         }
     }
 
-    pub fn add_group(&mut self, group_name: &str, username: &str) -> Result<(), io::Error> {
+    pub async fn join_group(&mut self, group_name: &str, username: &str) -> Result<(), io::Error> {
         if let Some(group) = self.groups.get_mut(group_name) {
             // The group exists, if the user was already in the group, ignore request
             if group.iter().find(|&x| *x == group_name.to_string()).is_some() {
-                trace!("User {} wanted to join {}  when already joined", username, group_name);
+                trace!("User {} wanted to join {} when already joined", username, group_name);
                 return Ok(())
             } else {
-                // Add the user to the group
+                // Add the user to the group and notify the users from the group that 
+                // the user has joined the group
                 group.push(username.to_string());
+
+                let notification = Command::Msg(group_name.to_string(), group_name.to_string(), 
+                    format!("--- user {} joined {} ---", username, group_name));
+                self.send2group(group_name, group_name, &notification).await?;
             }
         } else {
             // The group does not exist, create the group and add the user to the group
@@ -73,7 +78,7 @@ impl SharedConn {
         };
 
         // Check if the target is a group
-        if !target.starts_with("#") {
+        if target.starts_with("#") {
             // Send the message to all participants of the group
             return self.send2group(sender, target, &command).await;
         }
@@ -82,11 +87,11 @@ impl SharedConn {
         let target_tx = match self.shared_conn.get_mut(&target.to_string()) {
             Some(t) => t,
             None => return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput, 
-                    format!("Target {} not found", target))),
+                        io::ErrorKind::NotFound, 
+                        format!("Target {} not connected or does not exist", target))),
         };
 
-        // Send the message, MSG~sender~message
+        // Send the message
         if let Err(_) = target_tx.send(command) {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, 
                                       "Cannot transmit data to target"));
@@ -102,13 +107,13 @@ impl SharedConn {
         let group_users = match self.groups.get(target) {
             Some(g) => g,
             None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                    format!("The target group {} is does not exist", target))),
+                    format!("Target group {} does not exist", target))),
         };
 
         // Verify that the sender is a member from the target group
         if let None = group_users.iter().find(|&x| x == sender) {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
-                    format!("user {} is not a memeber of {}", sender, target)));
+                    format!("sender {} is not a memeber of {}", sender, target)));
         }
 
         for name in group_users {
@@ -153,6 +158,7 @@ impl Peer {
         let n = self.socket.read(&mut buffer).await?;
 
         if n == 0 {
+            println!("returning ok");
             return Ok(None);
         }
         // else 
@@ -195,7 +201,6 @@ impl Stream for Peer {
             return Poll::Ready(None);
         }
     }
-
 } 
 
 #[derive(Debug)]
@@ -245,6 +250,11 @@ impl DataBase {
         }
         
         Ok(DataBase {db})
+    }
+    
+    /// Returns true if the given username exists in the database
+    pub fn name_exists(&self, name: &str) -> bool {
+        self.db.iter().find(|&x| x.name == name ).is_some()
     }
     
     // Returns the username and password from the user input 

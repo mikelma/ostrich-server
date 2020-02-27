@@ -136,10 +136,11 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                     Command::Msg(_,_,_) => {
                         // Send the message to the target 
                         if let Err(err) = shared_conn.lock().await.send(mesg).await {
-                            debug!("Error user {} when trying to send data: {}", name, err);
-                            // Send error message to the user
+                            trace!("Error user {} when trying to send data: {}", name, err);
+                            // Crate an error command
                             let command = Command::Err(
                                 format!("unable to send message: {}", err));
+                            // Send error message to the user
                             if let Err(err) = user.send_command(&command).await {
                                 debug!("Cannot send Err command to user {}: {}",
                                           name, err);
@@ -149,9 +150,10 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                     Command::Join(join_name) => {
                         // Determine if the user wants to join another user or a group
                         if join_name.starts_with("#") {
-                            trace!("User {} wants to group user {}", name, join_name);
-
-                            if let Err(err) = shared_conn.lock().await.add_group(&join_name, &name) {
+                            trace!("User {} wants to join group: {}", name, join_name);
+                            
+                            // If the group exists join the group, else, create it
+                            if let Err(err) = shared_conn.lock().await.join_group(&join_name, &name).await {
                                 debug!("User {} cannot join {}: {}", name, join_name, err);
 
                                 // Send error to the user

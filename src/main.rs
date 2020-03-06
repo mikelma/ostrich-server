@@ -163,6 +163,10 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                                     debug!("Cannot send Err command to user {}: {}",
                                               name, err);
                                 }
+                            } else {
+                                // The user successully joined the group, add the group name to the
+                                // list of groups of the user
+                                user.groups.push(join_name);
                             }
                         } else {
                             trace!("User {} wants to join user {}", name, join_name);
@@ -186,12 +190,21 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
         }
     }
 
-    // Delete the user from Shared
-    {
-        if let Err(err) = shared_conn.lock().await.remove(&name) {
-            debug!("Error, user {}: {}", name, err); 
+    // Delete the user from Shared and for every group it's member of
+    debug!("User {} loged out", name);
+
+    // Delete user from shared 
+    if let Err(err) = shared_conn.lock().await.remove(&name) {
+        debug!("Error, user {}: {}", name, err); 
+    }
+
+    // Delete user for all the groups is in
+    for group in user.groups {
+        if let Err(err) = shared_conn.lock().await.left_group(&name, &group) {
+            warn!("Could not remove user {} from group {}: {}", name, group, err);
+        } else {
+            trace!("User {} left group {}", name, group);
         }
-        debug!("User {} loged out", name);
     }
     
     Ok(())

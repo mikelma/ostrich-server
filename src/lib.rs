@@ -65,6 +65,22 @@ impl SharedConn {
         }
         Ok(())
     }
+
+    pub fn left_group(&mut self, username: &str, group_name: &str) -> Result<(), io::Error> {
+        if let Some(group) = self.groups.get_mut(group_name) {
+            if let Some(index) = group.iter().position(|name| name == username) {
+                // Remove the user from the goup
+                group.remove(index);
+                return Ok(());
+            } else {
+                return Err(io::Error::new(io::ErrorKind::NotFound, 
+                        format!("User {} not found in {}", username, group_name)))
+            }
+        } else {
+            return Err(io::Error::new(io::ErrorKind::NotFound, 
+                            format!("Group {} not found", group_name)))
+        }
+    }
     
     pub async fn send(&mut self, 
                       command: Command) -> Result<(), io::Error>{
@@ -109,9 +125,10 @@ impl SharedConn {
             None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
                     format!("Target group {} does not exist", target))),
         };
-
-        // Verify that the sender is a member from the target group
-        if let None = group_users.iter().find(|&x| x == sender) {
+        
+        // If the sender is the target group, verify that 
+        // the sender is a member from the target group.
+        if target != sender && group_users.iter().find(|&x| x == sender).is_none() {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
                     format!("sender {} is not a memeber of {}", sender, target)));
         }
@@ -141,12 +158,13 @@ impl SharedConn {
 pub struct Peer {
     socket: TcpStream,
     rx: Rx,
+    pub groups: Vec<String>, // List of all group the user is member of
 }
 
 impl Peer {
 
     pub fn new(socket: TcpStream, rx: Rx) -> Peer {
-        Peer{ socket, rx }
+        Peer{ socket, rx , groups: Vec::new()}
     }
 
     pub async fn send_command(&mut self, command: &Command) -> Result<usize, io::Error> {

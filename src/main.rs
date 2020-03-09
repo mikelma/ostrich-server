@@ -121,17 +121,16 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
 
     while let Some(request) = user.next().await {
         match request {
-
             Ok(Message::Received(mesg)) => {
-                // Send the received message to the user 
+                // Send the received message to the target user 
                 if let Err(err) = user.send_command(&mesg).await {
                     debug!("User {} error sending message: {}", name, err);
                 }
             },
-
             Ok(Message::ToSend(mesg)) => {
-                // The user wants to send a message
-                // The only type of command that the user is allowed to send is MSG
+                // The server has received a message from the user,
+                // normally its a message to forward to another user or group (MSG commad).
+                // If the message is not a MSG command, process the command.
                 match mesg {
                     Command::Msg(_,_,_) => {
                         // Send the message to the target 
@@ -149,7 +148,7 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                     },
                     Command::Join(join_name) => {
                         // Determine if the user wants to join another user or a group
-                        if join_name.starts_with("#") {
+                        if join_name.starts_with('#') {
                             trace!("User {} wants to join group: {}", name, join_name);
                             
                             // If the group exists join the group, else, create it
@@ -172,9 +171,19 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                             trace!("User {} wants to join user {}", name, join_name);
                         }
                     },
+                    Command::Leave(target) => {
+                        // The user wants to leave a chat            
+                        if target.starts_with('#') {
+                            if let Err(err) = shared_conn.lock().await.left_group(&name, &target).await {
+                                warn!("Could not remove user {} from group {}: {}", name, target, err);
+                            } else {
+                                trace!("User {} left group {}", name, target);
+                            }
+                        }
+                    },
                     // Notify that a non valid command is sent
                     _ => {
-                        trace!("User {} invaid command to send", name);
+                        trace!("User {} invaid command received", name);
                         user.send_command(
                             &Command::Err(
                                 "Unable to send non MSG command".to_string()
@@ -200,7 +209,7 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
 
     // Delete user for all the groups is in
     for group in user.groups {
-        if let Err(err) = shared_conn.lock().await.left_group(&name, &group) {
+        if let Err(err) = shared_conn.lock().await.left_group(&name, &group).await {
             warn!("Could not remove user {} from group {}: {}", name, group, err);
         } else {
             trace!("User {} left group {}", name, group);

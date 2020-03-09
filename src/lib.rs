@@ -56,7 +56,7 @@ impl SharedConn {
                 group.push(username.to_string());
 
                 let notification = Command::Msg(group_name.to_string(), group_name.to_string(), 
-                    format!("--- user {} joined {} ---", username, group_name));
+                    format!("<--- user {} joined {} <---", username, group_name));
                 self.send2group(group_name, group_name, &notification).await?;
             }
         } else {
@@ -66,12 +66,18 @@ impl SharedConn {
         Ok(())
     }
 
-    pub fn left_group(&mut self, username: &str, group_name: &str) -> Result<(), io::Error> {
+    pub async fn left_group(&mut self, username: &str, group_name: &str) -> Result<(), io::Error> {
         if let Some(group) = self.groups.get_mut(group_name) {
             if let Some(index) = group.iter().position(|name| name == username) {
                 // Remove the user from the goup
                 group.remove(index);
+
+                // Notify other members about it
+                let notification = Command::Msg(group_name.to_string(), group_name.to_string(), 
+                    format!("---> user {} left {} --->", username, group_name));
+                self.send2group(group_name, group_name, &notification).await?;
                 return Ok(());
+
             } else {
                 return Err(io::Error::new(io::ErrorKind::NotFound, 
                         format!("User {} not found in {}", username, group_name)))

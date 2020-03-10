@@ -22,10 +22,15 @@ use std::fs::File;
 async fn main() -> Result<(), io::Error> {
         
     // Initialize server logger
-    CombinedLogger::init(vec![
-            TermLogger::new(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap(),
-            WriteLogger::new(LevelFilter::Info, Config::default(), File::create("server.log").unwrap()),
-        ]).unwrap();
+    if let Err(err) = CombinedLogger::init(vec![
+            TermLogger::new(LevelFilter::Trace, Config::default(), 
+                TerminalMode::Mixed).unwrap(),
+            WriteLogger::new(LevelFilter::Info, Config::default(), 
+                File::create("server.log").unwrap())]) {
+
+        eprintln!("Fatal: Could not initialize the logger: {}", err);
+        process::exit(-1);
+    }
     
     info!("Ostrich server initialized");
 

@@ -186,6 +186,35 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                             }
                         }
                     },
+                    Command::ListUsr(gname, _) => {
+                        // Check if the gname is really a group name (groups starts with #)
+                        if !gname.starts_with('#') {
+                            debug!("User {} trying to list a non group chat: '{}'", name, gname);
+                            // Send error to the user
+                            let cmd = Command::Err(
+                                format!("Trying to list a non group chat: '{}'", gname));
+                            if let Err(err) = user.send_command(&cmd).await {
+                                debug!("Cannot send Err command to user {}: {}",
+                                          name, err);
+                            }
+                        }
+    
+                        trace!("User {} requests listing group: {}", name, gname);
+                        if let Ok(usrs_list) = shared_conn.lock().await.list_group(&gname) {
+
+                            for set in usrs_list {
+
+                                let cmd = Command::ListUsr(gname.clone(), set);
+                                if let Err(err) = user.send_command(&cmd).await {
+                                    debug!("Cannot send MSG command to user {}: {}",
+                                              name, err);
+                                }
+                            }
+
+                        } else {
+                            debug!("cannot list group {}", gname);
+                        }
+                    },
                     // Notify that a non valid command is sent
                     _ => {
                         trace!("User {} invaid command received", name);

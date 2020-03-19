@@ -118,7 +118,6 @@ impl SharedConn {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, 
                                       "Cannot transmit data to target"));
         }
-
         Ok(())
     }
 
@@ -156,8 +155,73 @@ impl SharedConn {
                 }
             } 
         } 
-
         Ok(())
+    }
+    
+    /*
+    pub fn list_group(&self, group_name: &str) -> Result<Vec<Command>, io::Error> {
+        let group = match self.groups.get(group_name) {
+            Some(g) => g,
+            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
+                    format!("Group {} does not exist", group_name))),
+        };
+        
+        // Calculate the number of usernames that fit inside a ListUsr command
+        let max = (ostrich_core::TXT_BYTES.len()+1)/16; 
+        let mut usrs = vec![vec![]; if group.len() / max == 0 {1} else {group.len() / max} ];
+        group.iter()
+            .enumerate()
+            .for_each(|(index, user)| {
+                usrs[index % max].push(user.to_string());
+            });
+
+        let mut cmds = vec![];
+
+        usrs.iter()
+            .enumerate()
+            .for_each(|(id, set)| {
+
+            cmds.push(Command::ListUsr(group_name.to_string(), id, usrs.len(), set.len(), set.clone()));
+        });
+        Ok(cmds)
+    }
+    */
+    
+    /// Used to get a list of all usernames currently active in a group. All usernames, separated
+    /// by a newline character, are retuned as a single string if this string fits inside the
+    /// TXT_BYTES section of an `ostrich-core` packet. If the usernames do not fit inside a single
+    /// TXT_BYTES section, new string of usernames is appended to the returned vector.
+    pub fn list_group(&self, group_name: &str) -> Result<Vec<String>, io::Error> {
+        let group = match self.groups.get(group_name) {
+            Some(g) => g,
+            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
+                    format!("Group {} does not exist", group_name))),
+        };
+
+        let mut group = group.clone();
+
+        for i in 0..100 {
+            group.push(format!("kaixouser{}", i));
+        }
+
+        let max = ostrich_core::TXT_BYTES.len(); // Max bytes that fit in the TXT section
+        let mut users = vec![String::new()];
+        let mut count = 0;
+
+        for usr in group {
+            let name = format!("\n{}", usr);
+            count += name.len();
+
+            let index = if count / max > 0 {
+                (count/max)
+            } else {0};
+
+            if index >= users.len() {
+                users.push(String::new());
+            }
+            users[index].push_str(&name);
+        }
+        Ok(users)
     }
 }
 

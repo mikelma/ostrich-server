@@ -1,4 +1,4 @@
-use ostrich_core::{RawMessage, Command, PCK_SIZE};
+use ostrich_core::*;
 
 #[macro_use] extern crate log;
 use tokio::sync::mpsc;
@@ -52,12 +52,11 @@ impl SharedConn {
                 return Ok(())
             } else {
                 // Add the user to the group and notify the users from the group that 
-                // the user has joined the group
+                // the user has joined the group (do not notify to the joined user)
                 group.push(username.to_string());
-
-                let notification = Command::Msg(group_name.to_string(), group_name.to_string(), 
-                    format!("<--- user {} joined {} <---", username, group_name));
-                self.send2group(group_name, group_name, &notification).await?;
+                let notification = Command::ListUsr(
+                    group_name.to_string(), ListUsrOperation::Add, format!("\n{}", username));
+                self.send2group(username, group_name, None, &notification).await?;
             }
         } else {
             // The group does not exist, create the group and add the user to the group
@@ -66,26 +65,28 @@ impl SharedConn {
         Ok(())
     }
 
-    pub async fn left_group(&mut self, username: &str, group_name: &str) -> Result<(), io::Error> {
+    pub async fn leave_group(&mut self, username: &str, group_name: &str) -> Result<(), io::Error> {
         if let Some(group) = self.groups.get_mut(group_name) {
             if let Some(index) = group.iter().position(|name| name == username) {
                 // Remove the user from the goup
                 group.remove(index);
 
-                // Notify other members about it
-                let notification = Command::Msg(group_name.to_string(), group_name.to_string(), 
-                    format!("---> user {} left {} --->", username, group_name));
-                self.send2group(group_name, group_name, &notification).await?;
-                return Ok(());
+                // Notify other members about it, except to the user that leaves the group
+                let notification = Command::ListUsr(
+                    group_name.to_string(), ListUsrOperation::Remove, format!("\n{}", username));
+
+                self.send2group(group_name, group_name, Some(vec![&username]), &notification).await?;
 
             } else {
                 return Err(io::Error::new(io::ErrorKind::NotFound, 
                         format!("User {} not found in {}", username, group_name)))
             }
+
         } else {
             return Err(io::Error::new(io::ErrorKind::NotFound, 
                             format!("Group {} not found", group_name)))
         }
+        Ok(())
     }
     
     pub async fn send(&mut self, 
@@ -102,7 +103,7 @@ impl SharedConn {
         // Check if the target is a group
         if target.starts_with("#") {
             // Send the message to all participants of the group
-            return self.send2group(sender, target, &command).await;
+            return self.send2group(sender, target, None, &command).await;
         }
         
         // Get the target user's tx
@@ -120,9 +121,11 @@ impl SharedConn {
         }
         Ok(())
     }
-
+    
+    /// ignore parameter is a list of usernames to ignore when sending the command.
+    /// (feature needed for example, when notifying all memebers of a group that a user has gone)
     async fn send2group(&mut self, sender: &str, 
-        target: &str, command: &Command) -> Result<(), io::Error>{
+        target: &str, ignore: Option<Vec<&str>>, command: &Command) -> Result<(), io::Error>{
         
         // Get the target group, if group does not exist return an error
         let group_users = match self.groups.get(target) {
@@ -135,11 +138,19 @@ impl SharedConn {
         // the sender is a member from the target group.
         if target != sender && group_users.iter().find(|&x| x == sender).is_none() {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, 
-                    format!("sender {} is not a memeber of {}", sender, target)));
+                    format!("send2group error, sender {} is not a memeber of {}", sender, target)));
         }
 
         for name in group_users {
-            if name != sender {
+            // Check if the username is in the list to ignore
+            let to_ignore = match &ignore {
+                Some(vec) => {
+                    vec.iter().find(|&x| x == name).is_some()
+                },
+                None => false,
+            };
+            // Sender is always ignored
+            if name != sender && !to_ignore {
                 // Get the Tx of the user
                 let user_tx = match self.shared_conn.get_mut(name) {
                     Some(u) => u,
@@ -158,35 +169,6 @@ impl SharedConn {
         Ok(())
     }
     
-    /*
-    pub fn list_group(&self, group_name: &str) -> Result<Vec<Command>, io::Error> {
-        let group = match self.groups.get(group_name) {
-            Some(g) => g,
-            None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
-                    format!("Group {} does not exist", group_name))),
-        };
-        
-        // Calculate the number of usernames that fit inside a ListUsr command
-        let max = (ostrich_core::TXT_BYTES.len()+1)/16; 
-        let mut usrs = vec![vec![]; if group.len() / max == 0 {1} else {group.len() / max} ];
-        group.iter()
-            .enumerate()
-            .for_each(|(index, user)| {
-                usrs[index % max].push(user.to_string());
-            });
-
-        let mut cmds = vec![];
-
-        usrs.iter()
-            .enumerate()
-            .for_each(|(id, set)| {
-
-            cmds.push(Command::ListUsr(group_name.to_string(), id, usrs.len(), set.len(), set.clone()));
-        });
-        Ok(cmds)
-    }
-    */
-    
     /// Used to get a list of all usernames currently active in a group. All usernames, separated
     /// by a newline character, are retuned as a single string if this string fits inside the
     /// TXT_BYTES section of an `ostrich-core` packet. If the usernames do not fit inside a single
@@ -197,19 +179,15 @@ impl SharedConn {
             None => return Err(io::Error::new(io::ErrorKind::InvalidInput, 
                     format!("Group {} does not exist", group_name))),
         };
-
-        let mut group = group.clone();
-
-        for i in 0..100 {
-            group.push(format!("kaixouser{}", i));
-        }
+        
+        trace!("List of group {} is: {:?}", group_name, group);
 
         let max = ostrich_core::TXT_BYTES.len(); // Max bytes that fit in the TXT section
         let mut users = vec![String::new()];
         let mut count = 0;
 
         for usr in group {
-            let name = format!("\n{}", usr);
+            let name = format!("{}\n", usr);
             count += name.len();
 
             let index = if count / max > 0 {

@@ -1,0 +1,5 @@
+ip_address = "127.0.0.1"
+port = 9999 
+
+logger_file = "server.log"
+database_file = "db.json"

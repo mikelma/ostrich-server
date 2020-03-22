@@ -9,7 +9,11 @@ use std::net::SocketAddr;
 use std::process;
 
 use tokio::stream::{StreamExt};
-use ostrich_server::{SharedConn, Message, Peer, DataBase};
+use ostrich_server::{
+    SharedConn, Message, Peer, 
+    // NOTE: Renamed to avoid conflic with simplelog::Config
+    DataBase, config::Config as ServerConfig 
+};
 
 #[macro_use] extern crate log;
 extern crate simplelog;
@@ -20,22 +24,30 @@ use std::fs::File;
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
+
+    let server_config = ServerConfig::new("config.toml")
+        .unwrap_or_else(|err| {
+            eprintln!("Fatal error reading ostrich-server config file: {}",
+                err);
+            process::exit(-1);
+        });
         
     // Initialize server logger
     if let Err(err) = CombinedLogger::init(vec![
             TermLogger::new(LevelFilter::Trace, Config::default(), 
                 TerminalMode::Mixed).unwrap(),
             WriteLogger::new(LevelFilter::Info, Config::default(), 
-                File::create("server.log").unwrap())]) {
+                File::create(server_config.logger_file.clone()).unwrap())]) {
 
         eprintln!("Fatal: Could not initialize the logger: {}", err);
         process::exit(-1);
     }
-    
-    info!("Ostrich server initialized");
+
+    info!("Ostrich server initialized!");
+    info!("logger's output file path: {}", server_config.logger_file);
 
     // Load the DataBase 
-    let db = match DataBase::new("db.json") {
+    let db = match DataBase::new(&server_config.database_file) {
         Ok(db) => {
             info!("Database loaded");
             db
@@ -49,7 +61,9 @@ async fn main() -> Result<(), io::Error> {
 
     let shared_conn = Arc::new(Mutex::new(SharedConn::new()));
 
-    let addr = "127.0.0.1:9999";
+    let addr = format!("{}:{}", 
+        server_config.ip_address,
+        server_config.port);
 
     // Bind a TCP listener to the socket address
     let mut listener = TcpListener::bind(&addr).await?;

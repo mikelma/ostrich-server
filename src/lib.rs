@@ -13,6 +13,8 @@ use std::fs::File;
 use core::task::{Poll, Context};
 use core::pin::Pin;
 
+pub mod config;
+
 pub type Tx = mpsc::UnboundedSender<Command>;
 pub type Rx = mpsc::UnboundedReceiver<Command>;
 

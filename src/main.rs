@@ -1,4 +1,4 @@
-use ostrich_core::Command;
+use ostrich_core::*;
 
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc};
@@ -156,7 +156,7 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                         if join_name.starts_with('#') {
                             trace!("User {} wants to join group: {}", name, join_name);
                             
-                            // If the group exists join the group, else, create it
+                            // If the group exists, join the group, else, create it
                             if let Err(err) = shared_conn.lock().await.join_group(&join_name, &name).await {
                                 debug!("User {} cannot join {}: {}", name, join_name, err);
 
@@ -170,7 +170,7 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                             } else {
                                 // The user successully joined the group, add the group name to the
                                 // list of groups of the user
-                                user.groups.push(join_name);
+                                user.groups.push(join_name.clone());
                             }
                         } else {
                             trace!("User {} wants to join user {}", name, join_name);
@@ -179,14 +179,14 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
                     Command::Leave(target) => {
                         // The user wants to leave a chat            
                         if target.starts_with('#') {
-                            if let Err(err) = shared_conn.lock().await.left_group(&name, &target).await {
+                            if let Err(err) = shared_conn.lock().await.leave_group(&name, &target).await {
                                 warn!("Could not remove user {} from group {}: {}", name, target, err);
                             } else {
                                 trace!("User {} left group {}", name, target);
                             }
                         }
                     },
-                    Command::ListUsr(gname, _) => {
+                    Command::ListUsr(gname, _, _) => {
                         // Check if the gname is really a group name (groups starts with #)
                         if !gname.starts_with('#') {
                             debug!("User {} trying to list a non group chat: '{}'", name, gname);
@@ -201,10 +201,8 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
     
                         trace!("User {} requests listing group: {}", name, gname);
                         if let Ok(usrs_list) = shared_conn.lock().await.list_group(&gname) {
-
                             for set in usrs_list {
-
-                                let cmd = Command::ListUsr(gname.clone(), set);
+                                let cmd = Command::ListUsr(gname.clone(), ListUsrOperation::Add, set);
                                 if let Err(err) = user.send_command(&cmd).await {
                                     debug!("Cannot send MSG command to user {}: {}",
                                               name, err);
@@ -236,19 +234,19 @@ async fn process(shared_conn: Arc<Mutex<SharedConn>>,
     // Delete the user from Shared and for every group it's member of
     debug!("User {} loged out", name);
 
-    // Delete user from shared 
-    if let Err(err) = shared_conn.lock().await.remove(&name) {
-        debug!("Error, user {}: {}", name, err); 
-    }
-
     // Delete user for all the groups is in
     for group in user.groups {
-        if let Err(err) = shared_conn.lock().await.left_group(&name, &group).await {
+        if let Err(err) = shared_conn.lock().await.leave_group(&name, &group).await {
             warn!("Could not remove user {} from group {}: {}", name, group, err);
         } else {
             trace!("User {} left group {}", name, group);
         }
     }
+    // Delete user from shared 
+    if let Err(err) = shared_conn.lock().await.remove(&name) {
+        debug!("Error, user {}: {}", name, err); 
+    }
+
     
     Ok(())
 }
